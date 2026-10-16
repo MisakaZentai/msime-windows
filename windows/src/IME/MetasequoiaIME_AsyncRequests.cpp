@@ -46,10 +46,12 @@ class CPunctuationCommitEditSession : public CEditSessionBase
   public:
     CPunctuationCommitEditSession(CMetasequoiaIME *pTextService, ITfContext *pContext, UINT code, WCHAR wch,
                                   uint64_t requestId, LARGE_INTEGER requestStartQpc, std::wstring prefetchedText,
-                                  uint64_t focusToken, uint64_t compositionEpoch, uint64_t deferredReplayToken)
+                                  uint64_t focusToken, uint64_t compositionEpoch, uint64_t deferredReplayToken,
+                                  UINT commitReplyMessage, ULONGLONG commitReplyDeadlineTick)
         : CEditSessionBase(pTextService, pContext), _code(code), _wch(wch), _requestId(requestId),
           _requestStartQpc(requestStartQpc), _prefetchedText(std::move(prefetchedText)), _focusToken(focusToken),
-          _compositionEpoch(compositionEpoch), _deferredReplayToken(deferredReplayToken)
+          _compositionEpoch(compositionEpoch), _deferredReplayToken(deferredReplayToken),
+          _commitReplyMessage(commitReplyMessage), _commitReplyDeadlineTick(commitReplyDeadlineTick)
     {
         if (_requestStartQpc.QuadPart == 0)
         {
@@ -96,6 +98,20 @@ class CPunctuationCommitEditSession : public CEditSessionBase
             _pTextService->_HandleCompositionPunctuation(ec, _pContext, _code, _wch, _requestId, _prefetchedText);
         completion.applied = hr == S_OK;
         completion.result = hr;
+        if (hr == FANY_S_COMMIT_REPLY_NOT_READY)
+        {
+            // Same rule as CKeyHandlerEditSession: only the session itself runs
+            // both when the manager granted it synchronously and when it did not,
+            // so the hand-off has to happen here. Suppressing the failure above
+            // without handing off would leave the deferred token in flight for
+            // good and gate every later key. _HandleCompositionPunctuation only
+            // reports not-ready from the highlighted-candidate branch, which this
+            // session reaches only if the candidate state changed between the
+            // dispatch and this run.
+            _pTextService->_HandOffUnreadyCommitReply(_requestId, _deferredReplayToken, _commitReplyMessage,
+                                                      _commitReplyDeadlineTick, _code, _wch, FUNCTION_PUNCTUATION,
+                                                      _prefetchedText, _focusToken, _compositionEpoch);
+        }
         return hr;
     }
 
@@ -108,6 +124,12 @@ class CPunctuationCommitEditSession : public CEditSessionBase
     uint64_t _focusToken;
     uint64_t _compositionEpoch;
     uint64_t _deferredReplayToken;
+    // The asynchronous key request this session is applying, when there is one:
+    // the message that owns the cooperative reply poll and the end of the window
+    // that poll must keep using. Needed to hand the request back when the commit
+    // reply has not arrived.
+    UINT _commitReplyMessage;
+    ULONGLONG _commitReplyDeadlineTick;
 };
 
 class CSmartPunctuationEditSession : public CEditSessionBase
@@ -265,7 +287,8 @@ HRESULT CMetasequoiaIME::_RequestDirectPunctuationEditSession(_In_ ITfContext *p
                                                               uint64_t requestId, std::wstring prefetchedText,
                                                               uint64_t expectedFocusToken,
                                                               uint64_t expectedCompositionEpoch,
-                                                              uint64_t deferredReplayToken)
+                                                              uint64_t deferredReplayToken, UINT commitReplyMessage,
+                                                              ULONGLONG commitReplyDeadlineTick)
 {
     if (pContext == nullptr)
     {
@@ -278,7 +301,8 @@ HRESULT CMetasequoiaIME::_RequestDirectPunctuationEditSession(_In_ ITfContext *p
     CPunctuationCommitEditSession *pEditSession = new (std::nothrow) CPunctuationCommitEditSession(
         this, pContext, code, wch, requestId, requestStartQpc, std::move(prefetchedText),
         expectedFocusToken != 0 ? expectedFocusToken : _CaptureFocusSessionToken(),
-        expectedCompositionEpoch != 0 ? expectedCompositionEpoch : _CaptureCompositionEpoch(), deferredReplayToken);
+        expectedCompositionEpoch != 0 ? expectedCompositionEpoch : _CaptureCompositionEpoch(), deferredReplayToken,
+        commitReplyMessage, commitReplyDeadlineTick);
     if (pEditSession == nullptr)
     {
         _FailDeferredKey(deferredReplayToken, DeferredKeyFailureReason::EditSessionRequestFailed);
@@ -532,8 +556,12 @@ void CMetasequoiaIME::_HandOffUnreadyCommitReply(uint64_t requestId, uint64_t de
     request.deferredReplayToken = deferredReplayToken;
     request.keystrokeFunction = keystrokeFunction;
     request.prefetchedText = prefetchedText;
-    // The window already started by the first slice, never a fresh one: a
-    // hand-off must not extend how long a key can wait for its reply.
+    // Carry the window the first slice already started; a hand-off must not
+    // extend how long a key can wait for its reply. Only a path that reached its
+    // session without one starts a window here — the punctuation handler skips
+    // its prefetch when the highlighted-candidate condition is false at dispatch
+    // and the session then still finds the candidate state applicable — and such
+    // a key has not waited at all yet, so waitedMs stays 0.
     const ULONGLONG now = GetTickCount64();
     request.commitReplyDeadlineTick =
         commitReplyDeadlineTick != 0 ? commitReplyDeadlineTick : now + FANY_IME_COMMIT_REPLY_TIMEOUT_MS;
@@ -552,7 +580,10 @@ void CMetasequoiaIME::_HandOffUnreadyCommitReply(uint64_t requestId, uint64_t de
     // The request cannot be kept alive, so its reply may never be observed. That
     // is the same "delivered but unanswered" state the poll's own end-of-window
     // failure reports: drop the key with a transport reset and never send it
-    // again.
+    // again. Reached when the request is not one the cooperative poll owns, which
+    // in practice means a session started off the key path (commitReplyMessage
+    // == 0): the dispatch could not use the message window, so there is nothing
+    // to hand the request back to.
     _FailUnansweredCommitKey(requestId, deferredReplayToken);
 }
 

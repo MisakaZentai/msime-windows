@@ -700,10 +700,16 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
                               uint64_t expectedCompositionEpoch = 0, uint64_t expectedFocusToken = 0,
                               uint64_t deferredReplayToken = 0, UINT commitReplyMessage = 0,
                               ULONGLONG commitReplyDeadlineTick = 0);
+    // commitReplyMessage is the asynchronous key request whose reply this session
+    // consumes, and commitReplyDeadlineTick the end of the cooperative window it
+    // must keep using when it has to hand that request back. 0 means no such
+    // request (a session started off the key path, which cannot hand off; see
+    // _HandOffUnreadyCommitReply).
     HRESULT _RequestDirectPunctuationEditSession(_In_ ITfContext *pContext, UINT code, WCHAR wch, uint64_t requestId,
                                                  std::wstring prefetchedText, uint64_t expectedFocusToken = 0,
                                                  uint64_t expectedCompositionEpoch = 0,
-                                                 uint64_t deferredReplayToken = 0);
+                                                 uint64_t deferredReplayToken = 0, UINT commitReplyMessage = 0,
+                                                 ULONGLONG commitReplyDeadlineTick = 0);
 
     // function for the language property
     BOOL _SetCompositionLanguage(TfEditCookie ec, _In_ ITfContext *pContext);

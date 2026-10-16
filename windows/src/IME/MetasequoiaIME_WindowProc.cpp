@@ -742,7 +742,8 @@ LRESULT CALLBACK CMetasequoiaIME_WindowProc(HWND hWnd, UINT message, WPARAM wPar
                 {
                     pIME->_RequestDirectPunctuationEditSession(pContext, code, wch, request.requestId,
                                                                std::move(request.prefetchedText), request.focusToken,
-                                                               request.compositionEpoch, request.deferredReplayToken);
+                                                               request.compositionEpoch, request.deferredReplayToken,
+                                                               request.message, request.commitReplyDeadlineTick);
                     handedOffReplay = true;
                 }
                 else
