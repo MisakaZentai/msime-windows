@@ -484,6 +484,11 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
         uint64_t focusToken = 0;
         uint64_t compositionEpoch = 0;
         uint64_t deferredReplayToken = 0;
+        // Which key function the edit session must run. WM_AsyncFinalizeCandidate
+        // carries the two finalize variants as well as the bare convert it was
+        // built for, so the classification travels with the request instead of
+        // being re-derived from the key.
+        KEYSTROKE_FUNCTION keystrokeFunction = FUNCTION_FINALIZE_CANDIDATELIST;
         std::wstring prefetchedText;
         // End of the cooperative commit-reply window (GetTickCount64 domain),
         // 0 until the first slice starts it. Kept on the request so a re-posted
@@ -492,7 +497,8 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     };
     bool _PostAsyncKeyRequest(UINT message, UINT code, WCHAR wch, uint64_t requestId, std::wstring prefetchedText = {},
                               uint64_t expectedFocusToken = 0, uint64_t expectedCompositionEpoch = 0,
-                              uint64_t deferredReplayToken = 0);
+                              uint64_t deferredReplayToken = 0,
+                              KEYSTROKE_FUNCTION keystrokeFunction = FUNCTION_FINALIZE_CANDIDATELIST);
     bool _TakeAsyncKeyRequest(UINT message, UINT token, _Out_ AsyncKeyRequest &request);
     // One slice of a committing key's reply wait. The wait runs on the host UI
     // thread, so instead of blocking for the whole window this polls without
@@ -503,7 +509,21 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // TransportUnavailable frame.
     bool _PollCommitReply(UINT message, UINT token, _Inout_ AsyncKeyRequest &request,
                           _Outptr_result_maybenull_ FanyImeNamedpipeDataToTsf **receivedData);
+    // Puts a request back in the table and wakes the poll timer.
+    // token == 0 means the caller never held a slot of its own (an edit session
+    // handing a request back): a free slot is taken instead.
     bool _RequeueAsyncKeyRequest(UINT token, UINT message, AsyncKeyRequest request);
+    // Hands a committing key whose reply has not arrived back to
+    // _PollCommitReply, resuming the window the request already started so
+    // TIMER_COMMIT_REPLY_POLL picks it up again. Called from the edit session
+    // itself, because that is the only place that runs both when the session is
+    // granted synchronously and when it is granted asynchronously. A request
+    // that cannot be kept alive is dropped as unanswered, the same cost the
+    // poll's own end-of-window failure takes.
+    void _HandOffUnreadyCommitReply(uint64_t requestId, uint64_t deferredReplayToken, UINT message,
+                                    ULONGLONG commitReplyDeadlineTick, UINT code, WCHAR wch,
+                                    KEYSTROKE_FUNCTION keystrokeFunction, const std::wstring &prefetchedText,
+                                    uint64_t focusToken, uint64_t compositionEpoch);
     // Runs on TIMER_COMMIT_REPLY_POLL: re-dispatches, oldest request first, the
     // requests that yielded waiting for their committing reply, and stops the
     // timer once none is left.
@@ -670,11 +690,16 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
 
     HRESULT _RemoveDummyCompositionForComposing(TfEditCookie ec, _In_ ITfComposition *pComposition);
 
-    // Invoke key handler edit session
+    // Invoke key handler edit session. commitReplyMessage / commitReplyDeadline
+    // travel down to the session so that, when the committing reply has not
+    // arrived, it can hand its request back to the cooperative poll itself: the
+    // TSF manager may grant the session asynchronously, and then no caller ever
+    // sees the session's result.
     HRESULT _InvokeKeyHandler(_In_ ITfContext *pContext, UINT code, WCHAR wch, DWORD flags, _KEYSTROKE_STATE keyState,
                               uint64_t requestId, std::wstring prefetchedText = {}, UINT localResetToken = 0,
                               uint64_t expectedCompositionEpoch = 0, uint64_t expectedFocusToken = 0,
-                              uint64_t deferredReplayToken = 0);
+                              uint64_t deferredReplayToken = 0, UINT commitReplyMessage = 0,
+                              ULONGLONG commitReplyDeadlineTick = 0);
     HRESULT _RequestDirectPunctuationEditSession(_In_ ITfContext *pContext, UINT code, WCHAR wch, uint64_t requestId,
                                                  std::wstring prefetchedText, uint64_t expectedFocusToken = 0,
                                                  uint64_t expectedCompositionEpoch = 0,

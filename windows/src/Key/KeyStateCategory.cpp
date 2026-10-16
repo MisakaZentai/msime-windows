@@ -406,7 +406,15 @@ HRESULT CKeyStateCandidate::HandleKeyFinalizeCandidatelistForVKReturn(KeyHandler
 // HandleKeyFinalizeCandidatelistAndInput
 HRESULT CKeyStateCandidate::HandleKeyFinalizeCandidatelistAndInput(KeyHandlerEditSessionDTO dto)
 {
-    _pTextService->_HandleCandidateFinalize(dto.ec, dto.pContext, dto.requestId, dto.prefetchedText);
+    const HRESULT finalizeHr =
+        _pTextService->_HandleCandidateFinalize(dto.ec, dto.pContext, dto.requestId, dto.prefetchedText);
+    if (finalizeHr == FANY_S_COMMIT_REPLY_NOT_READY)
+    {
+        // The commit applied nothing: do not type the pending character into a
+        // composition the finalize half has not resolved yet. The handler owns
+        // the request from here and re-runs this session once the reply is in.
+        return finalizeHr;
+    }
     return _pTextService->_HandleCompositionInput(dto.ec, dto.pContext, dto.wch, dto.requestId);
 }
 

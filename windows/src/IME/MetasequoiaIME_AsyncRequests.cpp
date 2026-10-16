@@ -74,8 +74,10 @@ class CPunctuationCommitEditSession : public CEditSessionBase
                     {
                         textService->_CompleteDeferredKeyReplay(token);
                     }
-                    else
+                    else if (result != FANY_S_COMMIT_REPLY_NOT_READY)
                     {
+                        // Not ready is not a failure: the message handler keeps
+                        // the request waiting and re-runs this session later.
                         textService->_FailDeferredKey(
                             token, ClassifyEditSessionFailure(superseded, result == FANY_E_COMMIT_REPLY_AMBIGUOUS,
                                                               result == HRESULT_FROM_WIN32(ERROR_BROKEN_PIPE)));
@@ -380,7 +382,8 @@ bool CMetasequoiaIME::_TakePendingServerCandidate(_Out_ UINT *pMsgType, _Out_ st
 
 bool CMetasequoiaIME::_PostAsyncKeyRequest(UINT message, UINT code, WCHAR wch, uint64_t requestId,
                                            std::wstring prefetchedText, uint64_t expectedFocusToken,
-                                           uint64_t expectedCompositionEpoch, uint64_t deferredReplayToken)
+                                           uint64_t expectedCompositionEpoch, uint64_t deferredReplayToken,
+                                           KEYSTROKE_FUNCTION keystrokeFunction)
 {
     switch (message)
     {
@@ -426,7 +429,7 @@ bool CMetasequoiaIME::_PostAsyncKeyRequest(UINT message, UINT code, WCHAR wch, u
             } while (token == 0 || _pendingAsyncKeyMessages.count(token) != 0);
             _pendingAsyncKeyMessages.emplace(token, AsyncKeyRequest{message, code, wch, requestId, focusToken,
                                                                     compositionEpoch, deferredReplayToken,
-                                                                    std::move(prefetchedText)});
+                                                                    keystrokeFunction, std::move(prefetchedText)});
         }
     }
     if (token == 0)
@@ -476,12 +479,22 @@ bool CMetasequoiaIME::_TakeAsyncKeyRequest(UINT message, UINT token, _Out_ Async
 bool CMetasequoiaIME::_RequeueAsyncKeyRequest(UINT token, UINT message, AsyncKeyRequest request)
 {
     const HWND ownerWindow = _msgWndHandle;
-    if (token == 0 || !ownerWindow || !IsWindow(ownerWindow))
+    if (!ownerWindow || !IsWindow(ownerWindow))
     {
         return false;
     }
     {
         std::lock_guard<std::mutex> lock(_pendingCommitCandidateMutex);
+        // A handler's own token was taken off the table before it ran, so it is
+        // free to reuse. A session handing its request back never held one and
+        // passes 0: it takes a free slot.
+        if (token == 0 || _pendingAsyncKeyMessages.count(token) != 0)
+        {
+            do
+            {
+                token = NextWindowMessageToken();
+            } while (token == 0 || _pendingAsyncKeyMessages.count(token) != 0);
+        }
         _pendingAsyncKeyMessages[token] = std::move(request);
     }
     // Wake on a timer instead of re-posting the message: a posted message keeps
@@ -501,6 +514,46 @@ bool CMetasequoiaIME::_RequeueAsyncKeyRequest(UINT token, UINT message, AsyncKey
     std::lock_guard<std::mutex> lock(_pendingCommitCandidateMutex);
     _pendingAsyncKeyMessages.erase(token);
     return false;
+}
+
+void CMetasequoiaIME::_HandOffUnreadyCommitReply(uint64_t requestId, uint64_t deferredReplayToken, UINT message,
+                                                 ULONGLONG commitReplyDeadlineTick, UINT code, WCHAR wch,
+                                                 KEYSTROKE_FUNCTION keystrokeFunction,
+                                                 const std::wstring &prefetchedText, uint64_t focusToken,
+                                                 uint64_t compositionEpoch)
+{
+    AsyncKeyRequest request;
+    request.message = message;
+    request.code = code;
+    request.wch = wch;
+    request.requestId = requestId;
+    request.focusToken = focusToken;
+    request.compositionEpoch = compositionEpoch;
+    request.deferredReplayToken = deferredReplayToken;
+    request.keystrokeFunction = keystrokeFunction;
+    request.prefetchedText = prefetchedText;
+    // The window already started by the first slice, never a fresh one: a
+    // hand-off must not extend how long a key can wait for its reply.
+    const ULONGLONG now = GetTickCount64();
+    request.commitReplyDeadlineTick =
+        commitReplyDeadlineTick != 0 ? commitReplyDeadlineTick : now + FANY_IME_COMMIT_REPLY_TIMEOUT_MS;
+    const ULONGLONG remainingMs = request.commitReplyDeadlineTick > now ? request.commitReplyDeadlineTick - now : 0;
+    const double waitedMs = static_cast<double>(FANY_IME_COMMIT_REPLY_TIMEOUT_MS - remainingMs);
+
+    if (IsCommitReplyPollMessage(message) && _RequeueAsyncKeyRequest(/*token=*/0, message, std::move(request)))
+    {
+        // The single-shot read this replaces logged the timeout it took; there
+        // is no timeout here, so the hand-off itself is the record. Without it a
+        // commit that sits out a stalled engine leaves nothing in the key-latency
+        // log until the re-run that finally settles it.
+        DebugTsfKeyLatency(L"reply-not-ready", requestId, waitedMs, S_OK);
+        return;
+    }
+    // The request cannot be kept alive, so its reply may never be observed. That
+    // is the same "delivered but unanswered" state the poll's own end-of-window
+    // failure reports: drop the key with a transport reset and never send it
+    // again.
+    _FailUnansweredCommitKey(requestId, deferredReplayToken);
 }
 
 void CMetasequoiaIME::_DispatchPendingCommitReplyPolls()

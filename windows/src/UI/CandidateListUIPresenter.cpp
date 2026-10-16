@@ -71,7 +71,17 @@ HRESULT CMetasequoiaIME::_HandleCandidateFinalize(TfEditCookie ec, _In_ ITfConte
         const bool hasPrefetchedServerCandidate = _TakePendingServerCandidate(&serverMsgType, &serverCandidateString);
         if (!hasPrefetchedServerCandidate)
         {
-            struct FanyImeNamedpipeDataToTsf *receivedData = TryReadCommitReplyFromServerPipe(requestId);
+            struct FanyImeNamedpipeDataToTsf *receivedData = nullptr;
+            const CommitReplyWaitStatus replyStatus = TryReadCommitReplyFromServerPipe(requestId, &receivedData);
+            if (replyStatus == CommitReplyWaitStatus::NotReady)
+            {
+                // The transport is healthy and the reply is simply not here yet.
+                // Apply nothing and let the message handler hand this request
+                // back to the cooperative poll; the Server may still be
+                // answering it, so tearing the session down would drop a key it
+                // is about to commit.
+                return FANY_S_COMMIT_REPLY_NOT_READY;
+            }
             serverMsgType = receivedData->msg_type;
             serverCandidateString = receivedData->candidate_string;
         }
