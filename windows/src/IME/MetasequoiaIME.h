@@ -450,6 +450,21 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // resend it) and discard what DeferredKeyFailurePolicy.h says the reason
     // costs.
     void _FailDeferredKey(uint64_t replayToken, DeferredKeyFailureReason reason);
+    // Hands a committing key whose reply has not arrived back to
+    // _PollCommitReply, resuming the window the request already started so
+    // TIMER_COMMIT_REPLY_POLL picks it up again. Called from the edit session
+    // itself, because that is the only place that runs both when the session is
+    // granted synchronously and when it is granted asynchronously. A request
+    // that cannot be kept alive is dropped as unanswered, the same cost the
+    // poll's own end-of-window failure takes.
+    // Public, unlike the rest of the reply-poll internals: one of its callers,
+    // CPunctuationCommitEditSession, is defined in an anonymous namespace in
+    // MetasequoiaIME_AsyncRequests.cpp, so a friend declaration here could not
+    // name it.
+    void _HandOffUnreadyCommitReply(uint64_t requestId, uint64_t deferredReplayToken, UINT message,
+                                    ULONGLONG commitReplyDeadlineTick, UINT code, WCHAR wch,
+                                    KEYSTROKE_FUNCTION keystrokeFunction, const std::wstring &prefetchedText,
+                                    uint64_t focusToken, uint64_t compositionEpoch);
 
     // comless helpers
     static HRESULT CMetasequoiaIME::CreateInstance(REFCLSID rclsid, REFIID riid, _Outptr_result_maybenull_ LPVOID *ppv,
@@ -513,17 +528,6 @@ class CMetasequoiaIME : public ITfTextInputProcessorEx,
     // token == 0 means the caller never held a slot of its own (an edit session
     // handing a request back): a free slot is taken instead.
     bool _RequeueAsyncKeyRequest(UINT token, UINT message, AsyncKeyRequest request);
-    // Hands a committing key whose reply has not arrived back to
-    // _PollCommitReply, resuming the window the request already started so
-    // TIMER_COMMIT_REPLY_POLL picks it up again. Called from the edit session
-    // itself, because that is the only place that runs both when the session is
-    // granted synchronously and when it is granted asynchronously. A request
-    // that cannot be kept alive is dropped as unanswered, the same cost the
-    // poll's own end-of-window failure takes.
-    void _HandOffUnreadyCommitReply(uint64_t requestId, uint64_t deferredReplayToken, UINT message,
-                                    ULONGLONG commitReplyDeadlineTick, UINT code, WCHAR wch,
-                                    KEYSTROKE_FUNCTION keystrokeFunction, const std::wstring &prefetchedText,
-                                    uint64_t focusToken, uint64_t compositionEpoch);
     // Runs on TIMER_COMMIT_REPLY_POLL: re-dispatches, oldest request first, the
     // requests that yielded waiting for their committing reply, and stops the
     // timer once none is left.
