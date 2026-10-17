@@ -550,6 +550,10 @@ v_mode = true # V 模式：V 后接数字转中文（V123 → 一百二十三，
 # AI 辅助
 #
 [ai_assistant]
+# Jev selects from local candidates using the TypeSafe Choice API.
+token_jev = ""
+endpoint_jev = "https://api.typesafe.ai/v1/systemone"
+model_jev = "jev-1.13.0"
 enabled = false
 provider = "deepseek"
 # 请自行填写各提供商的 API Token，不要把真实密钥写进仓库。

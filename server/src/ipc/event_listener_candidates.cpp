@@ -308,7 +308,9 @@ std::string BuildCurrentCandidatePage()
             item.source != CandidateSource::Kaomoji && item.source != CandidateSource::DateTime &&
             item.source != CandidateSource::Generated)
             view.annotation = g_inputSession->get_helpcode_annotation(item.word, uppercase_all_helpcodes);
-        if (item.source == CandidateSource::CloudSuggestion)
+        if (!IsCandidateSubPageActive() && item.word == JevSelectionWord())
+            view.badge = " 〔Jev〕";
+        else if (item.source == CandidateSource::CloudSuggestion)
             view.badge = " ☁️";
         else if (item.source == CandidateSource::AiSuggestion)
             view.badge = ai_badge;
@@ -451,6 +453,7 @@ namespace event_listener_detail
 {
 void RefreshCandidatePageUi(bool show_window)
 {
+    RefreshJevSelection();
     PrepareCandidateTranslationRequest();
     const std::string candidate_string = BuildCurrentCandidatePage();
     // Host-drawn UI wants plain words (Microsoft IME style), not helpcodes.
