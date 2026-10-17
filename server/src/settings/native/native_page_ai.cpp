@@ -1,5 +1,7 @@
 #include "settings/native/native_page_voice_fields.h"
 
+#include "ai/jev_client.h"
+
 #include "msimeui/DeviceResources.h"
 #include "msimeui/Scene.h"
 #include "msimeui/Window.h"
@@ -29,7 +31,7 @@ const std::map<std::string, ProviderDefaults> &Defaults()
         {"siliconflow", {"https://api.siliconflow.cn/v1/chat/completions", "Qwen/Qwen3-8B"}},
         {"groq", {"https://api.groq.com/openai/v1/chat/completions", "qwen/qwen3.8-27b"}},
         {"custom", {"", ""}},
-        {"jev", {"https://api.typesafe.ai/v1/systemone", "jev-1.13.0"}},
+        {"jev", {Jev::kEndpoint, Jev::kModel}},
     };
     return defaults;
 }
@@ -518,7 +520,8 @@ struct AiPage : std::enable_shared_from_this<AiPage>
     void ApplyProviderFields()
     {
         const ProviderDefaults defaults = DefaultsOf(provider);
-        endpoint->SetText(Widen(!endpoints[provider].empty() ? endpoints[provider] : defaults.endpoint));
+        endpoint->SetText(
+            Widen(provider != "jev" && !endpoints[provider].empty() ? endpoints[provider] : defaults.endpoint));
         model->Input()->SetText(Widen(!models[provider].empty() ? models[provider] : defaults.model));
         model->Input()->SetPlaceholder(Widen(defaults.model));
     }
@@ -734,6 +737,13 @@ struct AiPage : std::enable_shared_from_this<AiPage>
 
             endpoint = GridInput();
             endpoint->SetOnCommit([this](const std::wstring &text) {
+                // Jev only talks to the official endpoint; any other value would silently disable it.
+                if (provider == "jev")
+                {
+                    Write("ai_assistant.endpoint", std::string(Jev::kEndpoint));
+                    endpoint->SetText(Widen(Jev::kEndpoint));
+                    return;
+                }
                 Write("ai_assistant.endpoint", Narrow(text));
                 if (text.empty())
                     endpoint->SetText(Widen(DefaultsOf(provider).endpoint));

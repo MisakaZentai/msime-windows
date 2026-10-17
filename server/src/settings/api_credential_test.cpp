@@ -337,7 +337,7 @@ Result Run(const Request &request)
 ModelListResult FetchModels(const Request &request)
 {
     if (request.service == "ai.assistant" && Value(request, "provider") == "jev")
-        return {true, "Jev 内置模型列表（未查询远端）", {Jev::kModel, "jev-latest", "jev-preview"}};
+        return {true, "Jev 不提供模型列表接口，仅列出已验证的内置模型", {Jev::kModel}};
     // 语音转写和润色页的「查询模型」走同一条路：模型清单端点只依赖 Token 和接口地址，
     // 与服务类型无关。
     if (request.service != "ai.assistant" && request.service != "voice.asr" && request.service != "voice.polish")

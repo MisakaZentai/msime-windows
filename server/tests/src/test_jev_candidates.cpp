@@ -81,6 +81,41 @@ TEST_CASE(jev_promotion_does_not_demote_first_choice_or_move_pinned_candidates)
     REQUIRE_EQ(items[3].word, "丁");
 }
 
+TEST_CASE(jev_promotion_moves_the_pool_entry_and_keeps_async_rows_in_place)
+{
+    std::vector<WordItem> items{{"shi'shi", "事实", 10},
+                                {"shi'shi", "实施", 9, CandidateSource::QuickPhrase},
+                                {"shi'shi", "实时", 8},
+                                {"shi'shi", "云", 7, CandidateSource::CloudSuggestion},
+                                {"shi'shi", "史诗", 6},
+                                {"shishi", "shishi", 5, CandidateSource::EnglishDictionary},
+                                {"shi'shi", "实施", 4, CandidateSource::UserDatabase}};
+    REQUIRE(Jev::Promote(items, "实施"));
+    REQUIRE_EQ(items[0].word, "事实");
+    REQUIRE(items[1].source == CandidateSource::QuickPhrase);
+    REQUIRE_EQ(items[2].word, "实时");
+    REQUIRE(items[3].source == CandidateSource::CloudSuggestion);
+    REQUIRE_EQ(items[4].word, "实施");
+    REQUIRE(items[4].source == CandidateSource::UserDatabase);
+    REQUIRE(items[5].source == CandidateSource::EnglishDictionary);
+    REQUIRE_EQ(items[6].word, "史诗");
+    const auto promoted = items;
+    REQUIRE(Jev::Promote(items, "实施"));
+    for (size_t i = 0; i < items.size(); ++i)
+        REQUIRE_EQ(items[i].word, promoted[i].word);
+}
+
+TEST_CASE(jev_promotion_rejects_pinned_or_ineligible_choices)
+{
+    std::vector<WordItem> items{
+        {"a", "甲", 10}, {"b", "乙", 9}, {"c", "丙", 8}, {"d", "丁", 7, CandidateSource::QuickPhrase}, {"e", "戊", 6}};
+    REQUIRE(!Jev::Promote(items, "丁"));
+    items[4].fixed_position = 5;
+    REQUIRE(!Jev::Promote(items, "戊"));
+    REQUIRE_EQ(items[2].word, "丙");
+    REQUIRE_EQ(items[4].word, "戊");
+}
+
 TEST_CASE(jev_query_rejects_old_composition_same_text_and_different_session)
 {
     metasequoia::OnlineQuery query;

@@ -14,6 +14,14 @@ inline bool SameQuery(const metasequoia::OnlineQuery &a, const metasequoia::Onli
            a.identity == b.identity && a.query_text == b.query_text && a.cache_key == b.cache_key &&
            a.pinyin_segments == b.pinyin_segments && a.ai_eligible && b.ai_eligible;
 }
+// Only local dictionary and model candidates are offered to Jev or moved by its choice.
+inline bool IsPoolSource(const WordItem &item)
+{
+    return item.source == CandidateSource::Database || item.source == CandidateSource::UserDatabase ||
+           item.sentence_association || item.source == CandidateSource::NeuralDesktop ||
+           item.source == CandidateSource::NeuralKeyboard || item.source == CandidateSource::Collocation;
+}
+
 inline std::vector<std::string> CandidatePool(const std::vector<WordItem> &items, size_t syllables)
 {
     std::vector<std::string> result;
@@ -21,11 +29,7 @@ inline std::vector<std::string> CandidatePool(const std::vector<WordItem> &items
         return result;
     for (const auto &item : items)
     {
-        const bool eligible =
-            item.source == CandidateSource::Database || item.source == CandidateSource::UserDatabase ||
-            item.sentence_association || item.source == CandidateSource::NeuralDesktop ||
-            item.source == CandidateSource::NeuralKeyboard || item.source == CandidateSource::Collocation;
-        if (!eligible || HelpcodeUtils::count_han_chars(item.word) != syllables ||
+        if (!IsPoolSource(item) || HelpcodeUtils::count_han_chars(item.word) != syllables ||
             HelpcodeUtils::count_utf8_chars(item.word) != syllables ||
             std::find(result.begin(), result.end(), item.word) != result.end())
             continue;
@@ -36,19 +40,21 @@ inline std::vector<std::string> CandidatePool(const std::vector<WordItem> &items
     return result;
 }
 
-// Keep the local first/second choice and all user-pinned positions stable. Preserve the full
+// Only the slots held by unpinned pool candidates are reordered, so cloud, English, date, emoji and
+// user-pinned rows keep the positions NormalizeMixedCandidateOrder gave them. Within those slots
+// the local first/second choice stay first and the choice becomes the third. Preserve the full
 // WordItem: pinyin, provenance and dictionary learning still belong to the original candidate.
 inline bool Promote(std::vector<WordItem> &items, const std::string &word)
 {
-    const auto selected =
-        std::find_if(items.begin(), items.end(), [&](const WordItem &item) { return item.word == word; });
-    if (selected == items.end())
+    std::vector<size_t> slots;
+    for (size_t i = 0; i < items.size(); ++i)
+        if (IsPoolSource(items[i]) && items[i].fixed_position == 0)
+            slots.push_back(i);
+    const auto selected = std::find_if(slots.begin(), slots.end(), [&](size_t i) { return items[i].word == word; });
+    if (selected == slots.end())
         return false;
-    if (std::any_of(items.begin(), items.end(), [](const WordItem &item) { return item.fixed_position > 0; }))
-        return true;
-    const auto rank = static_cast<size_t>(selected - items.begin());
-    if (rank > 2)
-        std::rotate(items.begin() + 2, selected, selected + 1);
+    for (auto rank = static_cast<size_t>(selected - slots.begin()); rank > 2; --rank)
+        std::swap(items[slots[rank]], items[slots[rank - 1]]);
     return true;
 }
 } // namespace Jev

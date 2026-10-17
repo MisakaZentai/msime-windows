@@ -60,8 +60,9 @@ void RefreshJevSelection()
         return;
     }
     auto &ui = Global::candidate_ui;
-    if (!IsCandidateSubPageActive() && ui.page_index == 0 && ui.selected_index_in_page == 0)
-        Jev::Promote(ui.items, g_jev_word);
+    if (!IsCandidateSubPageActive() && ui.page_index == 0 && ui.selected_index_in_page == 0 &&
+        !Jev::Promote(ui.items, g_jev_word))
+        ClearJevSelection();
 }
 } // namespace event_listener_detail
 

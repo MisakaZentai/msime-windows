@@ -45,7 +45,8 @@ std::string Fetch(const AiAssistant::Request &request, uint64_t generation, Jev:
 
     if (config.provider == "jev")
     {
-        if (request.candidates.empty())
+        // A single candidate leaves nothing to choose; skip sending the context off-device.
+        if (request.candidates.size() < 2)
             return {};
         try
         {

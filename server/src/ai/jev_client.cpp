@@ -137,9 +137,6 @@ std::optional<std::string> Client::Fetch(const std::string &endpoint, const std:
 std::optional<std::string> Fetch(const std::string &endpoint, const std::string &token, const std::string &payload,
                                  const std::function<bool()> &cancelled)
 {
-    if (endpoint != kEndpoint || token.empty() || (cancelled && cancelled()))
-        return std::nullopt;
-    Client client;
-    return client.Fetch(endpoint, token, payload, cancelled);
+    return Client{}.Fetch(endpoint, token, payload, cancelled);
 }
 } // namespace Jev
